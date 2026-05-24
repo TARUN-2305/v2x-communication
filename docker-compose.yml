@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ECO-SYNC V2X — Production Stack
+# Services: MQTT broker (V2X radio sim) + PostgreSQL + Redis + Backend + Frontend
+
+services:
+
+  # ── MQTT Broker: simulates DSRC/C-V2X radio layer ─────────────────────────
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: ecosync_mqtt
+    ports:
+      - "1883:1883"   # MQTT TCP
+      - "9001:9001"   # MQTT over WebSocket (browser clients)
+    volumes:
+      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_logs:/mosquitto/log
+    restart: unless-stopped
+    networks: [ecosync]
+
+  # ── PostgreSQL: persistent trip/decision/metrics storage ──────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecosync_postgres
+    environment:
+      POSTGRES_DB: ecosync
+      POSTGRES_USER: ecosync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecosync2026}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecosync -d ecosync"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [ecosync]
+
+  # ── Redis: fast state cache + pub/sub bridge ───────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ecosync_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    networks: [ecosync]
+
+  # ── Backend: FastAPI + V2X engine ─────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: ecosync_backend
+    ports:
+      - "8000:8000"
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ECOSYNC_OLLAMA_HOST: ${ECOSYNC_OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_PRIMARY: ${OLLAMA_PRIMARY:-gemma3:4b}
+      OLLAMA_FALLBACK: ${OLLAMA_FALLBACK:-phi3:latest}
+      DATABASE_URL: postgresql://ecosync:${POSTGRES_PASSWORD:-ecosync2026}@postgres:5432/ecosync
+      REDIS_URL: redis://redis:6379/0
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      NUM_BUSES: ${NUM_BUSES:-6}
+      SIM_SPEED: ${SIM_SPEED:-1.0}
+    depends_on:
+      postgres: { condition: service_healthy }
+      mqtt: { condition: service_started }
+      redis: { condition: service_started }
+    volumes:
+      - ./data:/app/data:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks: [ecosync]
+
+  # ── Frontend: React + Leaflet dashboard ───────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: ecosync_frontend
+    ports:
+      - "3000:80"
+    depends_on: [backend]
+    restart: unless-stopped
+    networks: [ecosync]
+
+volumes:
+  postgres_data:
+  redis_data:
+  mqtt_data:
+  mqtt_logs:
+
+networks:
+  ecosync:
+    driver: bridge
