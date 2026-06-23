@@ -58,6 +58,106 @@ function StatBadge({ label, value, accent }) {
   );
 }
 
+const STOP_NAMES = [
+  'Hebbal','Esteem Mall','Nagawara','Hennur','KR Puram',
+  'Tin Factory','Marathahalli','Bellandur','Sarjapur Rd','HSR Layout',
+  'Silk Board','BTM Layout','JP Nagar','Bannerghatta Rd','Gottigere',
+  'Uttarahalli','Kengeri','Mysore Rd','Peenya','Jalahalli',
+  'Yeshwanthpur','Tumkur Rd','Mathikere','HBR Layout','Banaswadi',
+  'Horamavu','Ramamurthy Nagar','Varthur','Whitefield','Hebbal Loop'
+];
+
+function TelemetrySidebar({ buses, loads, busActions, logs }) {
+  return (
+    <div className="flex flex-col h-full bg-slate-900 border-l border-slate-800/60 overflow-hidden w-80 shrink-0">
+      <div className="p-4 border-b border-slate-800 shrink-0 bg-slate-950/20">
+        <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2">
+          📡 Live Telemetry
+        </h3>
+        <p className="text-xs text-slate-500 mt-1">Real-time stats per active vehicle</p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {buses.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-center p-4">
+            <div className="text-slate-500 text-xs">Waiting for live simulation stream...</div>
+          </div>
+        ) : (
+          buses.map(bus => {
+            const loadObj = loads.find(l => l.id === bus.id);
+            const load = loadObj ? loadObj.load : 0;
+            const action = busActions[bus.id] ?? 0;
+            const stopName = STOP_NAMES[bus.stop % STOP_NAMES.length] ?? `Stop ${bus.stop}`;
+            
+            // Get latest action log details
+            const latestLog = [...logs].reverse().find(l => l.bus_id === bus.id);
+            const reward = latestLog ? latestLog.reward : null;
+            const explanation = latestLog ? latestLog.explanation : "Waiting for first decision explanation...";
+            
+            const loadPercent = Math.min((load / 80) * 100, 100);
+            const loadColor = load >= 60 ? 'bg-rose-500' : load >= 30 ? 'bg-amber-500' : 'bg-emerald-500';
+            const actionLabel = action === 1 ? 'HOLD' : action === 2 ? 'SKIP' : 'PROCEED';
+            const actionBadgeColor = action === 1 
+              ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' 
+              : action === 2 
+                ? 'bg-orange-500/10 border-orange-500/30 text-orange-400' 
+                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
+            
+            return (
+              <div key={bus.id} className="bg-slate-950/40 border border-slate-800/80 rounded-xl p-3.5 space-y-3 shadow-md hover:border-slate-700/60 transition-all">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-slate-800 flex items-center justify-center font-bold text-xs text-slate-300">
+                      #{bus.id}
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200">Vehicle {bus.id}</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase border tracking-wider ${actionBadgeColor}`}>
+                    {actionLabel}
+                  </span>
+                </div>
+
+                {/* Location */}
+                <div className="text-xs text-slate-400 flex justify-between items-center bg-slate-900/40 p-2 rounded-lg border border-slate-900">
+                  <span>📍 {stopName}</span>
+                  <span className="text-slate-500">Stop {bus.stop}</span>
+                </div>
+
+                {/* Onboard load progress */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px] text-slate-400">
+                    <span>👥 Onboard Load</span>
+                    <span className="font-semibold">{load}/80 pax</span>
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div className={`h-full ${loadColor} transition-all duration-500`} style={{ width: `${loadPercent}%` }} />
+                  </div>
+                </div>
+
+                {/* Economy impact & explanation */}
+                <div className="border-t border-slate-800 pt-2 text-[11px] text-slate-400 space-y-1">
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-slate-500">ECONOMY NET</span>
+                    {reward !== null ? (
+                      <span className={`font-bold ${reward >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {reward >= 0 ? '+' : ''}₹{reward.toFixed(1)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-600">—</span>
+                    )}
+                  </div>
+                  <p className="italic text-slate-300 leading-snug line-clamp-2">{explanation}</p>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const { staticMetrics, simulationState, mode, setMode, resetSimulation } = useSimulation();
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -153,6 +253,14 @@ function App() {
                 </div>
               </div>
             </div>
+
+            {/* Right Sidebar: Telemetry */}
+            <TelemetrySidebar
+              buses={simulationState.buses}
+              loads={simulationState.loads}
+              busActions={simulationState.busActions}
+              logs={simulationState.logs}
+            />
           </div>
         )}
 

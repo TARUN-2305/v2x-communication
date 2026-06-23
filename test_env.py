@@ -63,17 +63,27 @@ class BengaluruBusEnv(gym.Env):
         delay_seconds = self.delays_matrix[segment, time_idx]
         self.delay_minutes = delay_seconds / 60.0
         
+        # Skipping a stop avoids acceleration/deceleration/door delays, reducing delay by 30%
+        if action == 2:
+            self.delay_minutes *= 0.7
+            
         idle_minutes = 1.0 if action == 1 else 0.0
         self.idle_or_delay_minutes = self.delay_minutes + idle_minutes
         
-        # Micro: wait cost (Value of Time = ₹1.67/min)
-        wait_cost = passengers_waiting * 1.67 * self.delay_minutes
-        
+        # Micro: wait cost (Value of Time scaled 10x for proper economic penalty)
+        wait_cost = passengers_waiting * 1.67 * self.delay_minutes * 10.0
+        if action == 2:
+            # Passenger inconvenience penalty for being passed by
+            wait_cost += passengers_waiting * 15.0
+            
         # Macro: BMTC operational fuel cost (Speed 15km/h = ₹0.83/min)
         fuel_cost = 0.83 * self.idle_or_delay_minutes
         
-        # Revenue: ticket price ₹15 x boarded passengers
-        boarded = min(passengers_waiting, self.capacity - passengers_onboard)
+        # Revenue: ticket price ₹15 x boarded passengers (0 if skipping stop)
+        if action == 2:
+            boarded = 0
+        else:
+            boarded = min(passengers_waiting, self.capacity - passengers_onboard)
         revenue = 15 * boarded
         
         return revenue, wait_cost, fuel_cost
@@ -83,25 +93,40 @@ class BengaluruBusEnv(gym.Env):
         stop = self.bus_pos[bus_id]
         
         time_idx = min(self.current_step, self.time_steps - 1)
-        self.stops[stop]['queue_length'] += self.arrival_rates[stop, time_idx]
         
+        # Continuous passenger arrivals at all stops
+        for s in range(self.num_stops):
+            self.stops[s]['queue_length'] += self.arrival_rates[s, time_idx] / self.num_buses
+            
         revenue, wait_cost, fuel_cost = self.compute_reward(bus_id, action)
         reward = revenue - wait_cost - fuel_cost
         
-        passengers_waiting = self.stops[stop]['queue_length']
-        boarded = min(passengers_waiting, self.capacity - self.bus_load[bus_id])
-        self.stops[stop]['queue_length'] -= boarded
-        self.bus_load[bus_id] += boarded
-        
-        alighting = int(self.bus_load[bus_id] * 0.1)
-        self.bus_load[bus_id] -= alighting
+        # Check bunching to apply penalty
+        ahead_id = (bus_id - 1) % self.num_buses
+        gap_ahead = (self.bus_pos[ahead_id] - self.bus_pos[bus_id]) % self.num_stops
+        if gap_ahead <= 1.0:
+            reward -= 250.0  # Dynamic bunching penalty
+            
+        if action == 2: # SKIP
+            # No boarding or alighting at this stop
+            boarded = 0
+            alighting = 0
+        else:
+            passengers_waiting = self.stops[stop]['queue_length']
+            boarded = min(passengers_waiting, self.capacity - self.bus_load[bus_id])
+            self.stops[stop]['queue_length'] -= boarded
+            self.bus_load[bus_id] += boarded
+            
+            alighting = int(self.bus_load[bus_id] * 0.1)
+            self.bus_load[bus_id] -= alighting
         
         if action == 0: # PROCEED
             self.bus_pos[bus_id] = (self.bus_pos[bus_id] + 1) % self.num_stops
         elif action == 1: # HOLD
             pass
         elif action == 2: # SKIP
-            self.bus_pos[bus_id] = (self.bus_pos[bus_id] + 2) % self.num_stops
+            # Moves to the next stop but without boarding/alighting at the current one
+            self.bus_pos[bus_id] = (self.bus_pos[bus_id] + 1) % self.num_stops
             
         self.current_step += 1
         done = self.current_step >= self.time_steps * self.num_buses

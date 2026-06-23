@@ -85,6 +85,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 gap_ahead = float(obs[0])
                 action = 1 if gap_ahead <= 2 else 0
                 
+            # Capture telemetry of the current bus before taking the step
+            curr_gap_ahead = float(obs[0])
+            curr_gap_behind = float(obs[1])
+            curr_queue_len = float(obs[2])
+            
             obs, reward, done, truncated, info = env.step(action)
             
             econ_data = {
@@ -99,7 +104,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 0, env.stops[current_bus_stop]['queue_length'] * scale
             )
             loop = asyncio.get_event_loop()
-            explanation = await loop.run_in_executor(None, explain_action, bus_id, action, econ_data)
+            explanation = await loop.run_in_executor(
+                None, explain_action, bus_id, action, econ_data,
+                curr_gap_ahead, curr_gap_behind, curr_queue_len
+            )
             
             # Construct payload
             bus_pos_list = [{"id": int(k), "stop": int(v)} for k, v in env.bus_pos.items()]
